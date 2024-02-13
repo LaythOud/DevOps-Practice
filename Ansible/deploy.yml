@@ -1,0 +1,147 @@
+---
+
+- name: Download and Install GitLab Runner 
+  hosts: main
+  gather_facts: false
+  become: true
+        
+  tasks:
+    - name: Update and upgrade all packages to the latest version
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+        cache_valid_time: 3600
+
+    - name: Install dependencies
+      apt:
+        name:
+          - git
+          - wget
+
+    - name: Download GitLab Runner script
+      shell: |
+        wget -qO- https://packages.gitlab.com/install/repositories/runner/gitlab-runner/script.deb.sh | sudo bash
+
+    - name: Install GitLab Runner
+      apt:
+        name:
+          - gitlab-runner
+
+
+- name: Register a GitLab Runner
+  hosts: main
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Include production variables
+      include_vars:
+        file: "vars.prod.yml"
+      when: ENV == "PRODUCTION"
+
+    - name: Register GitLab Runner
+      shell: |
+          sudo gitlab-runner register \
+            --non-interactive \
+            --url {{ GITLAB_REGISTRY }} \
+            --registration-token {{ GITLAB_REGISTRY_TOKEN }} \
+            --executor "shell" \
+            --description "Production Runner" \
+            --tag-list {{ GITLAB_RUNNER_TAGS }} \
+
+    - name: Start GitLab Runner service
+      service:
+        name: gitlab-runner
+        state: started
+        enabled: yes
+
+
+
+- name: Install Docker and Docker Compose
+  hosts: main
+  become: true
+  vars:
+    arch_mapping:  # Map ansible architecture {{ ansible_architecture }} names to Docker's architecture names
+      x86_64: amd64
+      aarch64: arm64
+  
+  tasks:
+    - name: Include production variables
+      include_vars:
+        file: "vars.prod.yml"
+      when: ENV == "PRODUCTION"
+
+    - name: Update and upgrade all packages to the latest version
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      ansible.builtin.apt:
+        pkg:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - software-properties-common
+
+    - name: Create directory for Docker's GPG key
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker's official GPG key
+      ansible.builtin.apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        keyring: /etc/apt/keyrings/docker.gpg
+        state: present
+        
+    - name: Print architecture variables
+      ansible.builtin.debug:
+        msg: "Architecture: {{ ansible_architecture }}, Codename: {{ ansible_lsb.codename }}"
+
+    - name: Add Docker repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ arch_mapping[ansible_architecture] | default(ansible_architecture) }}
+          signed-by=/etc/apt/keyrings/docker.gpg]
+          https://download.docker.com/linux/ubuntu {{ ansible_lsb.codename }} stable
+        filename: docker
+        state: present
+
+    - name: Install Docker and related packages
+      ansible.builtin.apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: true
+      loop:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+        - docker-buildx-plugin
+        - docker-compose-plugin
+
+    - name: Add Docker group
+      ansible.builtin.group:
+        name: docker
+        state: present
+
+    - name: Add user to Docker group
+      ansible.builtin.user:
+        name: "{{ item }}"
+        groups: docker
+        append: true
+      loop:
+        - "{{ ansible_user }}"
+        - gitlab-runner
+
+    - name: Enable and start Docker services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - docker.service
+        - containerd.service

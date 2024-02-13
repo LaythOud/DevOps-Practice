@@ -1,0 +1,6 @@
+FROM redis:alpine
+
+VOLUME /data
+
+HEALTHCHECK --interval=5s --timeout=5s --retries=3 \
+             CMD redis-cli ping || exit 1

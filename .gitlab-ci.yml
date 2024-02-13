@@ -1,0 +1,119 @@
+---
+
+stages:
+  - build
+  - test
+  - release
+  - pre-deploy
+  - deploy
+
+variables:
+  IMAGE_PREFIX: $CI_REGISTRY/laythoud/staytus-assessment
+  CONTAINER_TEST_TAG: $CI_COMMIT_REF_SLUG
+  CONTAINER_RELEASE_TAG: latest
+
+
+default:
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+
+build:
+  image: docker:20.10.16
+  stage: build
+  services:
+    - docker:20.10.16-dind
+  script:
+    - docker build --pull -t $IMAGE_PREFIX/staytus-app:$CONTAINER_TEST_TAG ./App
+    - docker build --pull -t $IMAGE_PREFIX/staytus-database:$CONTAINER_TEST_TAG -f Dockerfile.database .
+    - docker build --pull -t $IMAGE_PREFIX/staytus-redis:$CONTAINER_TEST_TAG -f Dockerfile.redis .
+    - docker push $IMAGE_PREFIX/staytus-app:$CONTAINER_TEST_TAG 
+    - docker push $IMAGE_PREFIX/staytus-database:$CONTAINER_TEST_TAG 
+    - docker push $IMAGE_PREFIX/staytus-redis:$CONTAINER_TEST_TAG
+  timeout: 5 minutes
+  rules:
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+
+
+test-mysql:
+  image: docker:20.10.16
+  stage: test
+  services:
+    - docker:20.10.16-dind
+  script:
+    - docker pull $IMAGE_PREFIX/staytus-database:$CONTAINER_TEST_TAG 
+    - docker run -d --name=mysql-test -e MYSQL_ALLOW_EMPTY_PASSWORD=1 -p 3306:3306 $IMAGE_PREFIX/staytus-database:$CONTAINER_TEST_TAG
+    - sleep 20 && docker exec mysql-test mysql
+  timeout: 2 minutes
+  rules:
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+
+test-redis:
+  image: docker:20.10.16
+  stage: test
+  services:
+    - docker:20.10.16-dind
+  script:
+    - docker pull $IMAGE_PREFIX/staytus-redis:$CONTAINER_TEST_TAG
+    - docker run -d --name=redis-test -p 6379:6379 $IMAGE_PREFIX/staytus-redis:$CONTAINER_TEST_TAG
+    - sleep 5 && docker exec redis-test redis-cli
+  timeout: 2 minutes
+  rules:
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+
+test-app:
+  image: docker:20.10.16
+  stage: test
+  services:
+    - docker:20.10.16-dind
+  script:
+    - docker pull $IMAGE_PREFIX/staytus-app:$CONTAINER_TEST_TAG 
+    - docker run -d --name=app-test -e APP_KEY=$APP_KEY -e DB_CONNECTION=mysql 
+      -e DB_HOST=$MYSQL_ROOT_HOST -e DB_PORT=3306 -e DB_DATABASE=$MYSQL_DATABASE 
+      -e DB_USERNAME=$MYSQL_USERNAME -e DB_PASSWORD=$MYSQL_PASSWORD 
+      -e REDIS_HOST=$REDIS_HOST -e REDIS_PASSWORD=$REDIS_PASSWORD -e REDIS_PORT=6379 
+      -p 80:80 $IMAGE_PREFIX/staytus-app:$CONTAINER_TEST_TAG
+    - sleep 5 && docker exec  app-test /bin/bash test.sh
+  timeout: 2 minutes
+  rules:
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+
+release-image:
+  image: docker:20.10.16
+  stage: release
+  services:
+    - docker:20.10.16-dind
+  script:
+    - docker pull $IMAGE_PREFIX/staytus-app:$CONTAINER_TEST_TAG 
+    - docker pull $IMAGE_PREFIX/staytus-database:$CONTAINER_TEST_TAG 
+    - docker pull $IMAGE_PREFIX/staytus-redis:$CONTAINER_TEST_TAG
+    - docker tag $IMAGE_PREFIX/staytus-app:$CONTAINER_TEST_TAG $IMAGE_PREFIX/staytus-app:$CONTAINER_RELEASE_TAG
+    - docker tag $IMAGE_PREFIX/staytus-database:$CONTAINER_TEST_TAG $IMAGE_PREFIX/staytus-database:$CONTAINER_RELEASE_TAG
+    - docker tag $IMAGE_PREFIX/staytus-redis:$CONTAINER_TEST_TAG $IMAGE_PREFIX/staytus-redis:$CONTAINER_RELEASE_TAG
+    - docker push $IMAGE_PREFIX/staytus-app:$CONTAINER_RELEASE_TAG 
+    - docker push $IMAGE_PREFIX/staytus-database:$CONTAINER_RELEASE_TAG 
+    - docker push $IMAGE_PREFIX/staytus-redis:$CONTAINER_RELEASE_TAG
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+pre-deploy:
+  image: $IMAGE_PREFIX/staytus-ansiable:latest
+  stage: pre-deploy
+  before_script: []
+  script:
+    - ansible-playbook -i Ansible/hosts Ansible/deploy.yml -e ENV=PRODUCTION --vault-password-file /root/.ansible_vault 
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+deploy:
+  stage: deploy
+  before_script: []
+  script:
+    - /bin/bash deploy.sh
+  allow_failure: false
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  tags:
+    - deploy
+    - prod-runner
