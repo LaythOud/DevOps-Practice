@@ -23,9 +23,9 @@ build:
   services:
     - docker:20.10.16-dind
   script:
-    - docker build --pull -t $IMAGE_PREFIX/staytus-app:$CONTAINER_TEST_TAG ./App
-    - docker build --pull -t $IMAGE_PREFIX/staytus-database:$CONTAINER_TEST_TAG -f Dockerfile.database .
-    - docker build --pull -t $IMAGE_PREFIX/staytus-redis:$CONTAINER_TEST_TAG -f Dockerfile.redis .
+    - docker build --cache-from $IMAGE_PREFIX/staytus-app:$CONTAINER_RELEASE_TAG -t $IMAGE_PREFIX/staytus-app:$CONTAINER_TEST_TAG ./App
+    - docker build --cache-from $IMAGE_PREFIX/staytus-database:$CONTAINER_RELEASE_TAG -t $IMAGE_PREFIX/staytus-database:$CONTAINER_TEST_TAG -f Dockerfile.database .
+    - docker build --cache-from $IMAGE_PREFIX/staytus-redis:$CONTAINER_RELEASE_TAG -t $IMAGE_PREFIX/staytus-redis:$CONTAINER_TEST_TAG -f Dockerfile.redis .
     - docker push $IMAGE_PREFIX/staytus-app:$CONTAINER_TEST_TAG 
     - docker push $IMAGE_PREFIX/staytus-database:$CONTAINER_TEST_TAG 
     - docker push $IMAGE_PREFIX/staytus-redis:$CONTAINER_TEST_TAG
